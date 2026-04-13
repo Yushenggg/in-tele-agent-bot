@@ -1,0 +1,12 @@
+[project]
+name = "telebasebot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=1.2.15",
+    "langchain-ollama>=1.1.0",
+    "langchain-openai>=1.1.12",
+    "python-telegram-bot>=22.7",
+]
