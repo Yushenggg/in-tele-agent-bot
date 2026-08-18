@@ -20,3 +20,6 @@ backup/*
 
 # Scheduler state
 data/
+
+# NanoGateway Trace
+.nanogateway
