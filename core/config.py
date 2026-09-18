@@ -24,6 +24,10 @@ class AppConfig(BaseSettings):
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     default_model: str | None = Field(default=None, alias="DEFAULT_MODEL")
 
+    use_nanogateway: bool = Field(default=False, alias="USE_NANOGATEWAY")
+    nanogateway_port: int = Field(default=9000, alias="NANOGATEWAY_PORT")
+    nanogateway_url: str | None = Field(default=None, alias="NANOGATEWAY_URL")
+
     default_idle_timeout_seconds: int = Field(
         default=300, alias="DEFAULT_IDLE_TIMEOUT_SECONDS"
     )

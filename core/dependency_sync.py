@@ -6,7 +6,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.config import WORKING_DIR
+from core.config import WORKING_DIR, app_config
 
 logger = logging.getLogger("DEPENDENCY_SYNC")
 
@@ -17,6 +17,9 @@ MANIFEST_PATH = WORKING_DIR / "deps.txt"
 BASE_PYPROJECT_PATH = PROJECT_ROOT / "base" / "pyproject.toml"
 
 UV_TIMEOUT_SECONDS = 300
+
+# Optional dependency group defined under [project.optional-dependencies].
+NANOGATEWAY_EXTRA = "nanogateway"
 
 _WORKING_SUBDIRS = ("handlers", "tools", "subagents")
 
@@ -179,8 +182,21 @@ async def revert_project_files(backups: dict[Path, bytes]) -> None:
     await _run_uv_sync()
 
 
-async def _run_uv_sync() -> tuple[bool, str]:
+def _requested_extras() -> list[str]:
+    return [NANOGATEWAY_EXTRA] if app_config.use_nanogateway else []
+
+
+def ensure_extra(extra: str) -> tuple[bool, str]:
+    """Blocking sync of one optional dependency group (for the supervisor)."""
+    return asyncio.run(_run_uv_sync(extras=[extra]))
+
+
+async def _run_uv_sync(extras: list[str] | None = None) -> tuple[bool, str]:
+    if extras is None:
+        extras = _requested_extras()
     cmd = ["uv", "sync"]
+    for extra in extras:
+        cmd += ["--extra", extra]
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,

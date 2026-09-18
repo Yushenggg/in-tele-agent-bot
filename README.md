@@ -91,6 +91,31 @@ Notes:
 - The application normalizes this to the client API path when needed.
 - `AUTHORIZED_USER` is a single Telegram user ID that is allowed to interact with the bot (for whitelist management, use a single ID).
 
+### NanoGateway (optional)
+
+If you want to inspect every LLM call the bot makes, enable the bundled
+[NanoGateway](https://github.com/Yushenggg/nano-gateway) proxy. When enabled,
+the supervisor launches `nanogateway serve` and points the bot at it; traces
+are stored under `.nanogateway/`.
+
+```dotenv
+USE_NANOGATEWAY=false
+NANOGATEWAY_PORT=9000
+NANOGATEWAY_URL=          # upstream the gateway forwards to (defaults to OPENAI_BASE_URL)
+```
+
+It is **off by default**. Enabling it installs the optional `nanogateway`
+dependency (`uv sync --extra nanogateway`) and is available either via
+`USE_NANOGATEWAY=true` or per-run with the `--nanogateway` flag (and forced off
+with `--nanogateway false`):
+
+```bash
+uv run python main.py --nanogateway
+```
+
+When disabled, a plain `uv sync` (e.g. the startup/dependency reconciliation)
+does not install or keep the `nanogateway` package.
+
 ## Run the Bot
 
 Start the bot with:
@@ -109,6 +134,7 @@ TeleBaseBot/
 ├── core/                       # Core bot infrastructure (immutable)
 │   ├── config.py               # Application settings (env-based)
 │   ├── core_agent.py           # Agent orchestrator
+│   ├── gateway.py              # NanoGateway process launcher (optional)
 │   ├── session_manager.py      # Per-chat session memory and edit state
 │   ├── main_telegram_bot.py    # Telegram bot entry point
 │   ├── agents/

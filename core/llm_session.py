@@ -22,13 +22,22 @@ def _inject_session_header(request: httpx.Request) -> None:
         request.headers["X-Session-Id"] = sid
 
 
+async def _inject_session_header_async(request: httpx.Request) -> None:
+    _inject_session_header(request)
+
+
 def _attach_hooks(client: httpx.Client | httpx.AsyncClient | None) -> None:
     if client is None:
         return
+    hook = (
+        _inject_session_header_async
+        if isinstance(client, httpx.AsyncClient)
+        else _inject_session_header
+    )
     hooks = list(client.event_hooks.get("request", []))
-    if _inject_session_header in hooks:
+    if hook in hooks:
         return
-    client.event_hooks["request"] = [_inject_session_header, *hooks]
+    client.event_hooks["request"] = [hook, *hooks]
 
 
 def _walk_httpx_clients(obj: Any) -> list[httpx.Client | httpx.AsyncClient]:

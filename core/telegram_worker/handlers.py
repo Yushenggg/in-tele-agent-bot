@@ -234,7 +234,6 @@ class BotHandlers:
             project_snapshot = snapshot_project_files()
 
             code_sid = await self.sessions.get_or_create_code_session_id(chat_id)
-            await self.sessions.clear_edit_session_ids(chat_id)
             async with llm_session(code_sid, user_id):
                 result = await self._with_typing(
                     chat_id, context,
@@ -243,6 +242,7 @@ class BotHandlers:
             if result is None:
                 self._restore_working()
                 await revert_project_files(project_snapshot)
+                await self.sessions.clear_edit_session_ids(chat_id)
                 await self._reply(
                     chat_id, context,
                     "❌ Code Agent failed. No changes made. Rolled back.",
@@ -317,6 +317,7 @@ class BotHandlers:
         code_reply: str,
         project_snapshot,
     ) -> None:
+        await self.sessions.clear_edit_session_ids(chat_id)
         if not code_reply or not code_reply.strip():
             self._restore_working()
             await revert_project_files(project_snapshot)
@@ -442,7 +443,6 @@ class BotHandlers:
                 return
 
             await self.sessions.clear_edit_state(chat_id)
-            await self.sessions.clear_edit_session_ids(chat_id)
             await self._finish_execution(
                 chat_id, context, result.reply, state.project_snapshot,
             )

@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-settings>=2.13.1",
     "python-telegram-bot[job-queue]>=22.7",
     "pyyaml>=6.0.3",
-    "dateparser",
-    "nanogateway>=0.1.1",
 ]
+
+[project.optional-dependencies]
+nanogateway = ["nanogateway>=0.1.1"]
