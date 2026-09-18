@@ -96,7 +96,8 @@ Notes:
 If you want to inspect every LLM call the bot makes, enable the bundled
 [NanoGateway](https://github.com/Yushenggg/nano-gateway) proxy. When enabled,
 the supervisor launches `nanogateway serve` and points the bot at it; traces
-are stored under `.nanogateway/`.
+are stored under `.nanogateway/` and the gateway's own output is appended to
+`.nanogateway/nanogateway.log`.
 
 ```dotenv
 USE_NANOGATEWAY=false

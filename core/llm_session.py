@@ -11,9 +11,6 @@ logger = logging.getLogger("LLM_SESSION")
 session_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "nanogw_session_id", default=None
 )
-user_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "nanogw_user_id", default=None
-)
 
 
 def _inject_session_header(request: httpx.Request) -> None:
@@ -61,14 +58,12 @@ class SessionAwareChatOpenAI(ChatOpenAI):
 
     - X-Session-Id header (custom, ignored by plain OpenAI-compatible endpoints,
       read by nanogateway via proxy.py:_extract_session_id).
-    - user= field in body (standard OpenAI parameter; nanogateway reads
-      body.get("user"); OpenAI uses it for abuse tracking).
     - metadata.session_id in body (standard OpenAI metadata field; nanogateway
       falls back to metadata.session_id when the header is missing).
 
-    All three are standard / ignored-by-non-nanogateway, so this subclass is
-    safe to use whether OPENAI_BASE_URL points at nanogateway or directly at
-    an OpenAI-compatible endpoint.
+    Both are ignored by non-nanogateway endpoints, so this subclass is safe to
+    use whether OPENAI_BASE_URL points at nanogateway or directly at an
+    OpenAI-compatible endpoint.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -80,9 +75,8 @@ class SessionAwareChatOpenAI(ChatOpenAI):
             _install_hooks_on_openai_client(getattr(self, attr, None))
 
     def _augment_extra_body(self, kwargs: dict[str, Any]) -> None:
-        uid = user_id_var.get()
         sid = session_id_var.get()
-        if uid is None and sid is None:
+        if sid is None:
             return
         existing = kwargs.get("extra_body")
         if existing is None:
@@ -92,14 +86,11 @@ class SessionAwareChatOpenAI(ChatOpenAI):
         else:
             logger.debug("extra_body is %s; skipping session injection", type(existing))
             return
-        if uid is not None:
-            extra.setdefault("user", uid)
-        if sid is not None:
-            metadata = extra.get("metadata")
-            if not isinstance(metadata, dict):
-                metadata = {}
-            metadata.setdefault("session_id", sid)
-            extra["metadata"] = metadata
+        metadata = extra.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata.setdefault("session_id", sid)
+        extra["metadata"] = metadata
         kwargs["extra_body"] = extra
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
@@ -116,30 +107,20 @@ class SessionAwareChatOpenAI(ChatOpenAI):
 
 
 @asynccontextmanager
-async def llm_session(
-    session_id: str | None,
-    user_id: int | None = None,
-) -> AsyncIterator[None]:
+async def llm_session(session_id: str | None) -> AsyncIterator[None]:
     """Bind the current asyncio task's context to a nanogateway session.
 
-    The bound contextvars are read by SessionAwareChatOpenAI on every HTTP
+    The bound contextvar is read by SessionAwareChatOpenAI on every HTTP
     request, so any LLM call — sync or async — issued within this block will
-    carry the session and user identifiers.
+    carry the session identifier.
 
     Pass session_id=None to clear (defensive).
     """
     sid_token = session_id_var.set(session_id)
-    uid_token = (
-        user_id_var.set(str(user_id)) if user_id is not None else user_id_var.set(None)
-    )
     try:
         yield
     finally:
         try:
             session_id_var.reset(sid_token)
-        except ValueError:
-            pass
-        try:
-            user_id_var.reset(uid_token)
         except ValueError:
             pass

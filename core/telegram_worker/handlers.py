@@ -140,7 +140,6 @@ class BotHandlers:
             return
 
         chat_id = update.effective_chat.id
-        user_id = update.effective_user.id if update.effective_user else None
         instruction = update.effective_message.text.replace("/edit", "", 1).strip()
 
         if not instruction:
@@ -155,7 +154,7 @@ class BotHandlers:
         history = await self.sessions.append_message(chat_id, "user", f"/edit {instruction}")
 
         plan_sid = await self.sessions.get_or_create_plan_session_id(chat_id)
-        async with llm_session(plan_sid, user_id):
+        async with llm_session(plan_sid):
             plan = await self._with_typing(
                 chat_id, context,
                 self.agent.ainvoke_planner(history),
@@ -181,9 +180,8 @@ class BotHandlers:
         text = update.effective_message.text
         history = await self.sessions.append_message(chat_id, "user", text)
 
-        user_id = update.effective_user.id if update.effective_user else None
         chat_sid = await self.sessions.get_or_create_chat_session_id(chat_id)
-        async with llm_session(chat_sid, user_id):
+        async with llm_session(chat_sid):
             reply = await self._with_typing(
                 chat_id, context,
                 self.agent.ainvoke_standard(history),
@@ -205,7 +203,6 @@ class BotHandlers:
             await self._reply(chat_id, context, "⏰ Planning session timed out. Start a new /edit if needed.")
             return
 
-        user_id = update.effective_user.id if update.effective_user else None
         history = list(state.planner_history)
         user_text = update.effective_message.text
         history.append({"role": "user", "content": user_text})
@@ -217,7 +214,7 @@ class BotHandlers:
             plan_sid = await self.sessions.get_or_create_plan_session_id(chat_id)
             spec_history = list(history)
             spec_history.append({"role": "user", "content": _FINALIZE_SPEC_PROMPT})
-            async with llm_session(plan_sid, user_id):
+            async with llm_session(plan_sid):
                 spec = await self._with_typing(
                     chat_id, context,
                     self.agent.ainvoke_planner(spec_history),
@@ -234,7 +231,7 @@ class BotHandlers:
             project_snapshot = snapshot_project_files()
 
             code_sid = await self.sessions.get_or_create_code_session_id(chat_id)
-            async with llm_session(code_sid, user_id):
+            async with llm_session(code_sid):
                 result = await self._with_typing(
                     chat_id, context,
                     self.agent.ainvoke_code(spec, list(state.planner_history)),
@@ -288,7 +285,7 @@ class BotHandlers:
             )
         else:
             plan_sid = await self.sessions.get_or_create_plan_session_id(chat_id)
-            async with llm_session(plan_sid, user_id):
+            async with llm_session(plan_sid):
                 reply = await self._with_typing(
                     chat_id, context,
                     self.agent.ainvoke_planner(history),
@@ -379,13 +376,12 @@ class BotHandlers:
             return
 
         user_text = (update.effective_message.text or "").strip().lower()
-        user_id = update.effective_user.id if update.effective_user else None
         if user_text in ("continue", "resume", "go on", "keep going", "try again", "retry"):
             await self._reply(chat_id, context, "⚙️ Continuing...")
             code_sid = await self.sessions.get_or_create_code_session_id(chat_id)
             if state.agent_history:
                 async def _continue_coro():
-                    async with llm_session(code_sid, user_id):
+                    async with llm_session(code_sid):
                         return await self.agent.ainvoke_code_continue(
                             state.agent_history,
                             "Continue implementing the spec. Finish all remaining work, "
@@ -394,7 +390,7 @@ class BotHandlers:
                 coro = _continue_coro()
             else:
                 async def _code_coro():
-                    async with llm_session(code_sid, user_id):
+                    async with llm_session(code_sid):
                         return await self.agent.ainvoke_code(
                             state.spec or state.instruction,
                             list(state.planner_history),

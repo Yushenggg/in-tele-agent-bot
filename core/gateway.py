@@ -9,12 +9,18 @@ from pathlib import Path
 logger = logging.getLogger("NANOGATEWAY")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+GATEWAY_LOG_PATH = PROJECT_ROOT / ".nanogateway" / "nanogateway.log"
 GATEWAY_HOST = "127.0.0.1"
 STARTUP_TIMEOUT_SECONDS = 10.0
 
 
 def gateway_base_url(port: int) -> str:
     return f"http://{GATEWAY_HOST}:{port}"
+
+
+def _open_gateway_log():
+    GATEWAY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return open(GATEWAY_LOG_PATH, "ab")
 
 
 def is_gateway_up(port: int, timeout: float = 0.5) -> bool:
@@ -39,19 +45,25 @@ def start_gateway(port: int, upstream: str | None) -> subprocess.Popen | None:
     if upstream:
         env["NANOGATEWAY_URL"] = upstream
     logger.info(
-        "Starting NanoGateway on port %d (upstream=%s)", port, upstream or "default"
+        "Starting NanoGateway on port %d (upstream=%s, log=%s)",
+        port,
+        upstream or "default",
+        GATEWAY_LOG_PATH,
     )
+    log_file = _open_gateway_log()
     try:
         proc = subprocess.Popen(
             cmd,
             cwd=str(PROJECT_ROOT),
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
         )
     except OSError as e:
         logger.error("Failed to launch NanoGateway: %s", e)
         return None
+    finally:
+        log_file.close()
 
     deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
