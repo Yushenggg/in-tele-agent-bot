@@ -1,11 +1,10 @@
 import logging
 
-from langchain_openai import ChatOpenAI
-
 from core.agents.code_agent.agent import CodeAgent
 from core.agents.plan_agent.agent import PlanAgent
 from core.agents.standard_agent.agent import StandardAgent
 from core.config import WORKING_DIR, app_config
+from core.llm_session import SessionAwareChatOpenAI
 
 logger = logging.getLogger("CORE_AGENT")
 
@@ -13,7 +12,7 @@ logger = logging.getLogger("CORE_AGENT")
 class CoreAgent:
     def __init__(self):
         logger.info("Initializing CoreAgent (model=%s)", app_config.default_model)
-        self.llm = ChatOpenAI(
+        self.llm = SessionAwareChatOpenAI(
             model=app_config.default_model,
             api_key=app_config.openai_api_key,
             base_url=app_config.openai_base_url_for_client,

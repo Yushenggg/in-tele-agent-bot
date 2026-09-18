@@ -15,6 +15,7 @@ from core.dependency_sync import (
     snapshot_project_files,
     sync_dependencies,
 )
+from core.llm_session import llm_session
 from core.session_manager import SessionManager
 from core.telegram_worker.auth import RoleResolver
 
@@ -95,38 +96,40 @@ class BotHandlers:
             return
 
         chat_id = update.effective_chat.id
+        user_id = update.effective_user.id if update.effective_user else None
         kind = _get_update_kind(update)
 
-        edit_state = await self.sessions.get_edit_state(chat_id)
-        if edit_state:
-            if edit_state.phase == "planning":
-                await self._handle_planning_response(chat_id, update, context)
-            elif edit_state.phase == "executing_paused":
-                await self._handle_paused_response(chat_id, update, context)
-            return
+        async with llm_session(chat_id, user_id):
+            edit_state = await self.sessions.get_edit_state(chat_id)
+            if edit_state:
+                if edit_state.phase == "planning":
+                    await self._handle_planning_response(chat_id, update, context)
+                elif edit_state.phase == "executing_paused":
+                    await self._handle_paused_response(chat_id, update, context)
+                return
 
-        match kind:
-            case "text":
-                await self._handle_text(chat_id, update, context)
-            case "photo":
-                await self._reply(chat_id, context, "Nice photo! Unfortunately I can't do anything with it yet.")
-            case "sticker":
-                await self._reply(chat_id, context, "Nice sticker!")
-                if update.effective_message and update.effective_message.sticker:
-                    await context.bot.send_sticker(
-                        chat_id=chat_id,
-                        sticker=update.effective_message.sticker.file_id,
-                    )
-            case "document":
-                await self._reply(chat_id, context, "A document? I don't want that.")
-            case "audio" | "video" | "voice":
-                await self._reply(chat_id, context, "I see no evil, hear no evil. So I'm going to ignore that.")
-            case "location" | "contact" | "poll":
-                await self._reply(chat_id, context, "Seems complicated. Not gonna comment on that.")
-            case "caption":
-                await self._reply(chat_id, context, "How did you get here?")
-            case _:
-                await self._reply(chat_id, context, "Da hell is that?")
+            match kind:
+                case "text":
+                    await self._handle_text(chat_id, update, context)
+                case "photo":
+                    await self._reply(chat_id, context, "Nice photo! Unfortunately I can't do anything with it yet.")
+                case "sticker":
+                    await self._reply(chat_id, context, "Nice sticker!")
+                    if update.effective_message and update.effective_message.sticker:
+                        await context.bot.send_sticker(
+                            chat_id=chat_id,
+                            sticker=update.effective_message.sticker.file_id,
+                        )
+                case "document":
+                    await self._reply(chat_id, context, "A document? I don't want that.")
+                case "audio" | "video" | "voice":
+                    await self._reply(chat_id, context, "I see no evil, hear no evil. So I'm going to ignore that.")
+                case "location" | "contact" | "poll":
+                    await self._reply(chat_id, context, "Seems complicated. Not gonna comment on that.")
+                case "caption":
+                    await self._reply(chat_id, context, "How did you get here?")
+                case _:
+                    await self._reply(chat_id, context, "Da hell is that?")
 
     async def handle_edit(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -139,6 +142,7 @@ class BotHandlers:
             return
 
         chat_id = update.effective_chat.id
+        user_id = update.effective_user.id if update.effective_user else None
         instruction = update.effective_message.text.replace("/edit", "", 1).strip()
 
         if not instruction:
@@ -152,10 +156,11 @@ class BotHandlers:
 
         history = await self.sessions.append_message(chat_id, "user", f"/edit {instruction}")
 
-        plan = await self._with_typing(
-            chat_id, context,
-            self.agent.ainvoke_planner(history),
-        )
+        async with llm_session(chat_id, user_id):
+            plan = await self._with_typing(
+                chat_id, context,
+                self.agent.ainvoke_planner(history),
+            )
         if plan is None:
             await self._reply(chat_id, context, "❌ Planning failed.")
             return
