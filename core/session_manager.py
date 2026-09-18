@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, PrivateAttr
@@ -9,6 +10,12 @@ from pydantic import BaseModel, PrivateAttr
 Message = dict[str, str]
 
 EditStatePhase = Literal["planning", "executing_paused", "done", "cancelled"]
+
+SessionKind = Literal["chat", "plan", "code"]
+
+
+def _make_session_id(kind: SessionKind) -> str:
+    return f"{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H%M%S')}-{kind}"
 
 
 class EditState(BaseModel):
@@ -31,6 +38,9 @@ class SessionManager(BaseModel):
     _memory: dict[int, list[Message]] = PrivateAttr(default_factory=dict)
     _activity: dict[int, float] = PrivateAttr(default_factory=dict)
     _edit_states: dict[int, EditState] = PrivateAttr(default_factory=dict)
+    _chat_session_ids: dict[int, str] = PrivateAttr(default_factory=dict)
+    _plan_session_ids: dict[int, str] = PrivateAttr(default_factory=dict)
+    _code_session_ids: dict[int, str] = PrivateAttr(default_factory=dict)
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
     _cleanup_task: asyncio.Task | None = PrivateAttr(default=None)
 
@@ -89,12 +99,49 @@ class SessionManager(BaseModel):
             self._touch_unlocked(chat_id)
             return list(self._memory.get(chat_id, []))
 
+    async def get_or_create_chat_session_id(self, chat_id: int) -> str:
+        self._ensure_cleanup_started()
+        async with self._lock:
+            existing = self._chat_session_ids.get(chat_id)
+            if existing is not None:
+                return existing
+            sid = _make_session_id("chat")
+            self._chat_session_ids[chat_id] = sid
+            return sid
+
+    async def get_or_create_plan_session_id(self, chat_id: int) -> str:
+        self._ensure_cleanup_started()
+        async with self._lock:
+            existing = self._plan_session_ids.get(chat_id)
+            if existing is not None:
+                return existing
+            sid = _make_session_id("plan")
+            self._plan_session_ids[chat_id] = sid
+            return sid
+
+    async def get_or_create_code_session_id(self, chat_id: int) -> str:
+        self._ensure_cleanup_started()
+        async with self._lock:
+            existing = self._code_session_ids.get(chat_id)
+            if existing is not None:
+                return existing
+            sid = _make_session_id("code")
+            self._code_session_ids[chat_id] = sid
+            return sid
+
+    async def clear_edit_session_ids(self, chat_id: int) -> None:
+        async with self._lock:
+            self._plan_session_ids.pop(chat_id, None)
+            self._code_session_ids.pop(chat_id, None)
+
     async def get_edit_state(self, chat_id: int) -> EditState | None:
         self._ensure_cleanup_started()
         async with self._lock:
             state = self._edit_states.get(chat_id)
             if state and time.time() - state.started_at > self.edit_timeout:
                 del self._edit_states[chat_id]
+                self._plan_session_ids.pop(chat_id, None)
+                self._code_session_ids.pop(chat_id, None)
                 return None
             return state
 
@@ -124,6 +171,9 @@ class SessionManager(BaseModel):
             return state
 
     async def clear_edit_state(self, chat_id: int) -> None:
+        """Drop only the EditState record. Plan/code session IDs are preserved
+        so the caller can still finish in-flight planner/code calls; drop them
+        explicitly with ``clear_edit_session_ids`` when the edit is over."""
         self._ensure_cleanup_started()
         async with self._lock:
             self._edit_states.pop(chat_id, None)
@@ -134,14 +184,15 @@ class SessionManager(BaseModel):
             self._memory.pop(chat_id, None)
             self._activity.pop(chat_id, None)
             self._edit_states.pop(chat_id, None)
+            self._chat_session_ids.pop(chat_id, None)
+            self._plan_session_ids.pop(chat_id, None)
+            self._code_session_ids.pop(chat_id, None)
 
     def _evict_if_needed(self) -> None:
         if len(self._memory) <= self.max_sessions:
             return
         oldest = min(self._activity, key=self._activity.get)
-        self._memory.pop(oldest, None)
-        self._activity.pop(oldest, None)
-        self._edit_states.pop(oldest, None)
+        self._drop_chat_unlocked(oldest)
 
     async def _evict_idle(self) -> None:
         now = time.time()
@@ -155,17 +206,21 @@ class SessionManager(BaseModel):
                     continue
                 stale.append(chat_id)
             for chat_id in stale:
-                self._memory.pop(chat_id, None)
-                self._activity.pop(chat_id, None)
-                self._edit_states.pop(chat_id, None)
+                self._drop_chat_unlocked(chat_id)
             if stale:
                 logger = logging.getLogger("SESSION_MANAGER")
                 logger.info("Evicted %d idle sessions", len(stale))
+
+    def _drop_chat_unlocked(self, chat_id: int) -> None:
+        self._memory.pop(chat_id, None)
+        self._activity.pop(chat_id, None)
+        self._edit_states.pop(chat_id, None)
+        self._chat_session_ids.pop(chat_id, None)
+        self._plan_session_ids.pop(chat_id, None)
+        self._code_session_ids.pop(chat_id, None)
 
     def _touch_unlocked(self, chat_id: int) -> None:
         self._activity[chat_id] = time.time()
         if len(self._memory) > self.max_sessions:
             oldest = min(self._activity, key=self._activity.get)
-            self._memory.pop(oldest, None)
-            self._activity.pop(oldest, None)
-            self._edit_states.pop(oldest, None)
+            self._drop_chat_unlocked(oldest)

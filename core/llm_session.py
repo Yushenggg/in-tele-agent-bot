@@ -108,18 +108,18 @@ class SessionAwareChatOpenAI(ChatOpenAI):
 
 @asynccontextmanager
 async def llm_session(
-    chat_id: int | None,
+    session_id: str | None,
     user_id: int | None = None,
 ) -> AsyncIterator[None]:
-    """Bind the current asyncio task's context to a Telegram chat.
+    """Bind the current asyncio task's context to a nanogateway session.
 
     The bound contextvars are read by SessionAwareChatOpenAI on every HTTP
     request, so any LLM call — sync or async — issued within this block will
     carry the session and user identifiers.
 
-    Pass chat_id=None to clear (defensive).
+    Pass session_id=None to clear (defensive).
     """
-    sid_token = session_id_var.set(str(chat_id) if chat_id is not None else None)
+    sid_token = session_id_var.set(session_id)
     uid_token = (
         user_id_var.set(str(user_id)) if user_id is not None else user_id_var.set(None)
     )

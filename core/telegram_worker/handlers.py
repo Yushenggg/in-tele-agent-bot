@@ -96,40 +96,38 @@ class BotHandlers:
             return
 
         chat_id = update.effective_chat.id
-        user_id = update.effective_user.id if update.effective_user else None
         kind = _get_update_kind(update)
 
-        async with llm_session(chat_id, user_id):
-            edit_state = await self.sessions.get_edit_state(chat_id)
-            if edit_state:
-                if edit_state.phase == "planning":
-                    await self._handle_planning_response(chat_id, update, context)
-                elif edit_state.phase == "executing_paused":
-                    await self._handle_paused_response(chat_id, update, context)
-                return
+        edit_state = await self.sessions.get_edit_state(chat_id)
+        if edit_state:
+            if edit_state.phase == "planning":
+                await self._handle_planning_response(chat_id, update, context)
+            elif edit_state.phase == "executing_paused":
+                await self._handle_paused_response(chat_id, update, context)
+            return
 
-            match kind:
-                case "text":
-                    await self._handle_text(chat_id, update, context)
-                case "photo":
-                    await self._reply(chat_id, context, "Nice photo! Unfortunately I can't do anything with it yet.")
-                case "sticker":
-                    await self._reply(chat_id, context, "Nice sticker!")
-                    if update.effective_message and update.effective_message.sticker:
-                        await context.bot.send_sticker(
-                            chat_id=chat_id,
-                            sticker=update.effective_message.sticker.file_id,
-                        )
-                case "document":
-                    await self._reply(chat_id, context, "A document? I don't want that.")
-                case "audio" | "video" | "voice":
-                    await self._reply(chat_id, context, "I see no evil, hear no evil. So I'm going to ignore that.")
-                case "location" | "contact" | "poll":
-                    await self._reply(chat_id, context, "Seems complicated. Not gonna comment on that.")
-                case "caption":
-                    await self._reply(chat_id, context, "How did you get here?")
-                case _:
-                    await self._reply(chat_id, context, "Da hell is that?")
+        match kind:
+            case "text":
+                await self._handle_text(chat_id, update, context)
+            case "photo":
+                await self._reply(chat_id, context, "Nice photo! Unfortunately I can't do anything with it yet.")
+            case "sticker":
+                await self._reply(chat_id, context, "Nice sticker!")
+                if update.effective_message and update.effective_message.sticker:
+                    await context.bot.send_sticker(
+                        chat_id=chat_id,
+                        sticker=update.effective_message.sticker.file_id,
+                    )
+            case "document":
+                await self._reply(chat_id, context, "A document? I don't want that.")
+            case "audio" | "video" | "voice":
+                await self._reply(chat_id, context, "I see no evil, hear no evil. So I'm going to ignore that.")
+            case "location" | "contact" | "poll":
+                await self._reply(chat_id, context, "Seems complicated. Not gonna comment on that.")
+            case "caption":
+                await self._reply(chat_id, context, "How did you get here?")
+            case _:
+                await self._reply(chat_id, context, "Da hell is that?")
 
     async def handle_edit(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -156,7 +154,8 @@ class BotHandlers:
 
         history = await self.sessions.append_message(chat_id, "user", f"/edit {instruction}")
 
-        async with llm_session(chat_id, user_id):
+        plan_sid = await self.sessions.get_or_create_plan_session_id(chat_id)
+        async with llm_session(plan_sid, user_id):
             plan = await self._with_typing(
                 chat_id, context,
                 self.agent.ainvoke_planner(history),
@@ -182,10 +181,13 @@ class BotHandlers:
         text = update.effective_message.text
         history = await self.sessions.append_message(chat_id, "user", text)
 
-        reply = await self._with_typing(
-            chat_id, context,
-            self.agent.ainvoke_standard(history),
-        )
+        user_id = update.effective_user.id if update.effective_user else None
+        chat_sid = await self.sessions.get_or_create_chat_session_id(chat_id)
+        async with llm_session(chat_sid, user_id):
+            reply = await self._with_typing(
+                chat_id, context,
+                self.agent.ainvoke_standard(history),
+            )
         if reply is None:
             reply = "Sorry, I had trouble processing that. Please try again."
 
@@ -203,6 +205,7 @@ class BotHandlers:
             await self._reply(chat_id, context, "⏰ Planning session timed out. Start a new /edit if needed.")
             return
 
+        user_id = update.effective_user.id if update.effective_user else None
         history = list(state.planner_history)
         user_text = update.effective_message.text
         history.append({"role": "user", "content": user_text})
@@ -211,26 +214,32 @@ class BotHandlers:
             await self.sessions.clear_edit_state(chat_id)
             await self._reply(chat_id, context, "⚙️ Executing code mutation...")
 
+            plan_sid = await self.sessions.get_or_create_plan_session_id(chat_id)
             spec_history = list(history)
             spec_history.append({"role": "user", "content": _FINALIZE_SPEC_PROMPT})
-            spec = await self._with_typing(
-                chat_id, context,
-                self.agent.ainvoke_planner(spec_history),
-            )
+            async with llm_session(plan_sid, user_id):
+                spec = await self._with_typing(
+                    chat_id, context,
+                    self.agent.ainvoke_planner(spec_history),
+                )
             if not spec or not spec.strip():
                 await self._reply(
                     chat_id, context,
                     "❌ Could not finalize the spec. No changes made.",
                 )
+                await self.sessions.clear_edit_session_ids(chat_id)
                 return
 
             self._backup_working()
             project_snapshot = snapshot_project_files()
 
-            result = await self._with_typing(
-                chat_id, context,
-                self.agent.ainvoke_code(spec, list(state.planner_history)),
-            )
+            code_sid = await self.sessions.get_or_create_code_session_id(chat_id)
+            await self.sessions.clear_edit_session_ids(chat_id)
+            async with llm_session(code_sid, user_id):
+                result = await self._with_typing(
+                    chat_id, context,
+                    self.agent.ainvoke_code(spec, list(state.planner_history)),
+                )
             if result is None:
                 self._restore_working()
                 await revert_project_files(project_snapshot)
@@ -278,15 +287,18 @@ class BotHandlers:
                 chat_id, context, result.reply, project_snapshot,
             )
         else:
-            reply = await self._with_typing(
-                chat_id, context,
-                self.agent.ainvoke_planner(history),
-            )
+            plan_sid = await self.sessions.get_or_create_plan_session_id(chat_id)
+            async with llm_session(plan_sid, user_id):
+                reply = await self._with_typing(
+                    chat_id, context,
+                    self.agent.ainvoke_planner(history),
+                )
             if reply is None:
                 await self._reply(
                     chat_id, context, "❌ Planning failed.",
                 )
                 await self.sessions.clear_edit_state(chat_id)
+                await self.sessions.clear_edit_session_ids(chat_id)
                 return
 
             history.append({"role": "assistant", "content": reply})
@@ -366,19 +378,27 @@ class BotHandlers:
             return
 
         user_text = (update.effective_message.text or "").strip().lower()
+        user_id = update.effective_user.id if update.effective_user else None
         if user_text in ("continue", "resume", "go on", "keep going", "try again", "retry"):
             await self._reply(chat_id, context, "⚙️ Continuing...")
+            code_sid = await self.sessions.get_or_create_code_session_id(chat_id)
             if state.agent_history:
-                coro = self.agent.ainvoke_code_continue(
-                    state.agent_history,
-                    "Continue implementing the spec. Finish all remaining work, "
-                    "then reply with a brief summary.",
-                )
+                async def _continue_coro():
+                    async with llm_session(code_sid, user_id):
+                        return await self.agent.ainvoke_code_continue(
+                            state.agent_history,
+                            "Continue implementing the spec. Finish all remaining work, "
+                            "then reply with a brief summary.",
+                        )
+                coro = _continue_coro()
             else:
-                coro = self.agent.ainvoke_code(
-                    state.spec or state.instruction,
-                    list(state.planner_history),
-                )
+                async def _code_coro():
+                    async with llm_session(code_sid, user_id):
+                        return await self.agent.ainvoke_code(
+                            state.spec or state.instruction,
+                            list(state.planner_history),
+                        )
+                coro = _code_coro()
             result = await self._with_typing(chat_id, context, coro)
             if result is None:
                 await self._reply(
@@ -422,6 +442,7 @@ class BotHandlers:
                 return
 
             await self.sessions.clear_edit_state(chat_id)
+            await self.sessions.clear_edit_session_ids(chat_id)
             await self._finish_execution(
                 chat_id, context, result.reply, state.project_snapshot,
             )
@@ -432,6 +453,7 @@ class BotHandlers:
             if state.project_snapshot:
                 await revert_project_files(state.project_snapshot)
             await self.sessions.clear_edit_state(chat_id)
+            await self.sessions.clear_edit_session_ids(chat_id)
             await self._reply(chat_id, context, "🗑️ Rolled back. No changes kept.")
             return
 
