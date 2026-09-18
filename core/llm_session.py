@@ -1,19 +1,38 @@
 import contextvars
-import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 import httpx
 from langchain_openai import ChatOpenAI
 
-logger = logging.getLogger("LLM_SESSION")
-
 session_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "nanogw_session_id", default=None
 )
 
+_nanogateway_enabled: bool | None = None
+
+
+def _use_nanogateway() -> bool:
+    """Whether session headers should be injected at all.
+
+    Resolved from AppConfig lazily (and memoized) so this module stays
+    importable without Telegram credentials present. Injection is skipped in
+    direct mode so a strict OpenAI-compatible endpoint sees a vanilla request.
+    """
+    global _nanogateway_enabled
+    if _nanogateway_enabled is None:
+        try:
+            from core.config import app_config
+
+            _nanogateway_enabled = app_config.use_nanogateway
+        except Exception:
+            _nanogateway_enabled = False
+    return _nanogateway_enabled
+
 
 def _inject_session_header(request: httpx.Request) -> None:
+    if not _use_nanogateway():
+        return
     sid = session_id_var.get()
     if sid:
         request.headers["X-Session-Id"] = sid
@@ -54,16 +73,16 @@ def _install_hooks_on_openai_client(client: Any) -> None:
 
 
 class SessionAwareChatOpenAI(ChatOpenAI):
-    """ChatOpenAI that injects per-request session metadata into every outgoing call.
+    """ChatOpenAI that tags each request with the current session id.
 
-    - X-Session-Id header (custom, ignored by plain OpenAI-compatible endpoints,
-      read by nanogateway via proxy.py:_extract_session_id).
-    - metadata.session_id in body (standard OpenAI metadata field; nanogateway
-      falls back to metadata.session_id when the header is missing).
+    The id travels only in the ``X-Session-Id`` request header. Gateway-style
+    proxies (nanogateway) read it and rebuild the upstream headers from
+    scratch, so a strict OpenAI-compatible upstream never sees it; plain
+    endpoints ignore unknown headers. Nothing is written to the request body,
+    which is the channel that breaks strict OpenAI-compatible servers.
 
-    Both are ignored by non-nanogateway endpoints, so this subclass is safe to
-    use whether OPENAI_BASE_URL points at nanogateway or directly at an
-    OpenAI-compatible endpoint.
+    Header injection is skipped entirely unless ``USE_NANOGATEWAY`` is enabled,
+    so direct mode sends a vanilla request.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -74,33 +93,12 @@ class SessionAwareChatOpenAI(ChatOpenAI):
         for attr in ("root_client", "root_async_client"):
             _install_hooks_on_openai_client(getattr(self, attr, None))
 
-    def _augment_extra_body(self, kwargs: dict[str, Any]) -> None:
-        sid = session_id_var.get()
-        if sid is None:
-            return
-        existing = kwargs.get("extra_body")
-        if existing is None:
-            extra: dict[str, Any] = {}
-        elif isinstance(existing, dict):
-            extra = dict(existing)
-        else:
-            logger.debug("extra_body is %s; skipping session injection", type(existing))
-            return
-        metadata = extra.get("metadata")
-        if not isinstance(metadata, dict):
-            metadata = {}
-        metadata.setdefault("session_id", sid)
-        extra["metadata"] = metadata
-        kwargs["extra_body"] = extra
-
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         self._install_request_hooks()
-        self._augment_extra_body(kwargs)
         return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
         self._install_request_hooks()
-        self._augment_extra_body(kwargs)
         return await super()._agenerate(
             messages, stop=stop, run_manager=run_manager, **kwargs
         )

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -15,7 +16,8 @@ SessionKind = Literal["chat", "plan", "code"]
 
 
 def _make_session_id(kind: SessionKind) -> str:
-    return f"{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H%M%S')}-{kind}"
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
+    return f"{timestamp}-{kind}-{uuid.uuid4().hex[:8]}"
 
 
 class EditState(BaseModel):
